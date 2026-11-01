@@ -1,0 +1,22 @@
+# Local configuration (contains the database password)
+includes/config.php
+
+# Uploaded pictures (keep the folder, ignore the files)
+uploads/*
+!uploads/.gitkeep
+!uploads/.htaccess
+
+# Database backups contain personal data
+backups/*.sql
+!backups/.gitkeep
+!backups/.htaccess
+
+# Editor / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
