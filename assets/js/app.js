@@ -11,12 +11,24 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
-  // Name fields: strip digits as the user types
+    // Name and surname fields: digits can be typed, but a warning appears while any digit is present.
+  // (PHP still rejects digits when the form is submitted: this is only instant feedback.)
   document.querySelectorAll('input[data-type="name"]').forEach(function (el) {
+    var warning = document.createElement('span');
+    warning.className = 'error live-warning';
+    warning.setAttribute('role', 'alert');
+    warning.hidden = true;
+    el.insertAdjacentElement('afterend', warning);
+
     el.addEventListener('input', function () {
-      el.value = el.value.replace(/[0-9]/g, '');
+      var label = el.id === 'surname' ? 'Surname' : (el.id === 'name' ? 'Name' : 'This field');
+      var bad = /[0-9]/.test(el.value);
+      warning.hidden = !bad;
+      warning.textContent = bad ? '\u26A0 Numbers are not allowed in the ' + label.toLowerCase() + ' field. Please use letters only.' : '';
+      el.setAttribute('aria-invalid', bad ? 'true' : 'false');
     });
   });
+
 
   // Number-only fields (phone, age): strip letters as the user types
   document.querySelectorAll('input[data-type="digits"]').forEach(function (el) {

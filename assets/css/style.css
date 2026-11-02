@@ -75,6 +75,8 @@ input[type=text], input[type=password], input[type=number], input[type=date], in
   width: 100%; font-size: 1rem; padding: 12px; border: 2px solid #8A99A8; border-radius: 8px; background: #fff; color: var(--ink); font-family: inherit; }
 textarea { min-height: 110px; resize: vertical; }
 input:focus, select:focus, textarea:focus { border-color: var(--primary); }
+input[aria-invalid="true"] { border-color: var(--bad); }
+.live-warning[hidden] { display: none; }
 fieldset { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; margin: 0 0 16px; background: #fff; }
 legend { font-weight: 700; padding: 0 6px; }
 .check, .radio { display: flex; align-items: center; gap: 10px; font-weight: 500; padding: 8px 0; cursor: pointer; }
