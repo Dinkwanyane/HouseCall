@@ -148,6 +148,18 @@ th { background: #E8EEF1; font-size: 0.9rem; }
   .role-pick { grid-template-columns: 1fr; }
   .bar-row { grid-template-columns: 100px 1fr 44px; }
 }
+
+/* show / hide password (eye button added by app.js to every password box) */
+.pw-wrap { position: relative; display: block; }
+.pw-wrap input { padding-right: 56px; }
+.pw-toggle { position: absolute; top: 0; right: 0; height: 100%; min-width: 52px; display: grid; place-items: center;
+  background: transparent; border: 0; border-radius: 0 8px 8px 0; color: var(--primary-dark); cursor: pointer; padding: 0 10px; }
+.pw-toggle:hover { background: #E3F1EF; }
+.pw-toggle:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; }
+.pw-toggle svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+td .pw-wrap { display: inline-block; }
+td .pw-toggle { min-width: 40px; }
+td .pw-toggle svg { width: 20px; height: 20px; }
 @media print {
   .site-header, .site-footer, .tabs, .no-print { display: none !important; }
   body { background: #fff; }
