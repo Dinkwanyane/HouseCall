@@ -51,6 +51,14 @@ function report_data(PDO $pdo, string $from, string $to): array
         FROM users WHERE role <> 'admin' AND created_at BETWEEN ? AND ? GROUP BY month ORDER BY month DESC", $created);
     $r['signups_total'] = $q("SELECT SUM(role='client') AS clients, SUM(role='provider') AS providers FROM users")[0] ?? [];
 
+    // 6. Password changes (by the user through Forgot password, or reset by an administrator)
+    $r['pw_by_method'] = $q("SELECT method, COUNT(*) AS n FROM password_changes WHERE created_at BETWEEN ? AND ? GROUP BY method", $created);
+    $r['pw_by_role'] = $q("SELECT u.role, COUNT(*) AS n FROM password_changes pc JOIN users u ON u.id = pc.user_id
+        WHERE pc.created_at BETWEEN ? AND ? GROUP BY u.role", $created);
+    $r['pw_list'] = $q("SELECT pc.created_at, pc.method, CONCAT(u.name,' ',u.surname) AS who, u.username, u.role, CONCAT(a.name,' ',a.surname) AS admin_name
+        FROM password_changes pc JOIN users u ON u.id = pc.user_id LEFT JOIN users a ON a.id = pc.changed_by
+        WHERE pc.created_at BETWEEN ? AND ? ORDER BY pc.id DESC LIMIT 50", $created);
+
     return $r;
 }
 
