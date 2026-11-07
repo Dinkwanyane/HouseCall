@@ -1,3 +1,5 @@
+/* HouseCall styles: calm teal and warm neutrals, large text and big tap targets
+   for middle-aged and less tech-confident users. All text/background pairs meet WCAG AA contrast. */
 :root {
   --bg: #F6F8F7;
   --card: #FFFFFF;
@@ -128,6 +130,12 @@ th { background: #E8EEF1; font-size: 0.9rem; }
 .ad-placeholder { height: 160px; border-radius: 8px; background: #E3F1EF; display: grid; place-items: center; font-size: 2.5rem; }
 .thumbs { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
 .thumbs img { width: 90px; height: 90px; object-fit: cover; border-radius: 8px; }
+.thumb-item { margin: 0; text-align: center; }
+.thumb-download { display: block; margin-top: 4px; font-size: 0.85rem; font-weight: 600; }
+.decline-box { width: 100%; }
+.decline-box summary { cursor: pointer; list-style: none; display: inline-block; }
+.decline-box summary::-webkit-details-marker { display: none; }
+.decline-box[open] summary { margin-bottom: 8px; }
 .avail-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
 .avail-strip div { border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-size: 0.85rem; text-align: center; background: #fff; }
 .notif-new { border-left: 6px solid var(--accent); }
@@ -150,7 +158,6 @@ th { background: #E8EEF1; font-size: 0.9rem; }
   .role-pick { grid-template-columns: 1fr; }
   .bar-row { grid-template-columns: 100px 1fr 44px; }
 }
-
 /* show / hide password (eye button added by app.js to every password box) */
 .pw-wrap { position: relative; display: block; }
 .pw-wrap input { padding-right: 56px; }
@@ -167,3 +174,12 @@ td .pw-toggle svg { width: 20px; height: 20px; }
   body { background: #fff; }
   .card { break-inside: avoid; }
 }
+
+/* Two-way ratings */
+.stars.big { font-size: 1.4rem; }
+.aspects { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 4px; }
+.aspects li { display: flex; justify-content: space-between; gap: 12px; max-width: 360px; border-bottom: 1px dotted var(--line); }
+.rep-box { background: var(--warn-bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin: 10px 0; }
+.rep-box h4 { margin: 0 0 4px; }
+blockquote.reply { margin: 10px 0 0; padding: 8px 12px; border-left: 4px solid var(--accent); background: #f4f7f7; border-radius: 0 8px 8px 0; }
+.reply-form { margin-top: 10px; }
