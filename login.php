@@ -66,6 +66,7 @@ require_once 'includes/header.php';
       <input type="password" id="password" name="password" autocomplete="current-password" required></div>
     <button class="btn" type="submit">Log in</button>
   </form>
+  <p><a href="forgot_password.php">Forgot your password?</a></p>
   <p>New to HouseCall? <a href="register.php?role=client">Sign up as a client</a> or <a href="register.php?role=provider">as a service provider</a>.</p>
 </div>
 <?php require_once 'includes/footer.php'; ?>
