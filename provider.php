@@ -6,12 +6,31 @@ $user = require_role('provider');
 $uid  = $user['id'];
 $pdo  = db();
 $errors = [];
+$declineErr = null;   // set when the decline form has mistakes, so it can be shown again
 
 /* ------------------------------------------------------------------ actions */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check();
     $action = $_POST['action'] ?? '';
     $bid    = (int)($_POST['booking_id'] ?? 0);
+
+    // Public reply to a review a client wrote about me
+    if ($action === 'reply_review') {
+        $rid   = (int)($_POST['rating_id'] ?? 0);
+        $reply = trim((string)($_POST['reply'] ?? ''));
+        $err   = v_text($reply, 'Reply', 3, 300);
+        $st = $pdo->prepare('SELECT rater_id FROM ratings WHERE id = ? AND ratee_id = ? AND reply IS NULL');
+        $st->execute([$rid, $uid]);
+        $rater = $st->fetchColumn();
+        if (!$rater) flash('error', 'That review cannot be replied to (it may already have a reply).');
+        elseif ($err) flash('error', $err);
+        else {
+            $pdo->prepare('UPDATE ratings SET reply = ?, replied_at = NOW() WHERE id = ?')->execute([$reply, $rid]);
+            notify($pdo, (int)$rater, "{$user['name']} replied to your review.");
+            flash('success', 'Your reply is now shown under the review.');
+        }
+        redirect('provider.php?view=reviews');
+    }
 
     // Load the booking only if it belongs to this provider
     $booking = null;
@@ -37,7 +56,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $others = $pdo->prepare("SELECT id, client_id FROM bookings WHERE provider_id = ? AND booking_date = ? AND status = 'pending' AND id <> ?");
             $others->execute([$uid, $booking['booking_date'], $bid]);
             foreach ($others->fetchAll() as $o) {
-                $pdo->prepare("UPDATE bookings SET status = 'cancelled', cancelled_by = 'provider' WHERE id = ?")->execute([$o['id']]);
+                $pdo->prepare("UPDATE bookings SET status = 'cancelled', cancelled_by = 'provider', decline_reason = 'The day was taken by another booking.' WHERE id = ?")->execute([$o['id']]);
                 notify($pdo, (int)$o['client_id'], "Sorry, {$user['name']} is no longer available on $day. Please choose another day or provider.");
             }
             $pdo->commit();
@@ -45,9 +64,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     } elseif (($action === 'decline' && $booking && $booking['status'] === 'pending')
            || ($action === 'cancel' && $booking && $booking['status'] === 'confirmed')) {
-        $pdo->prepare("UPDATE bookings SET status = 'cancelled', cancelled_by = 'provider' WHERE id = ?")->execute([$bid]);
-        notify($pdo, (int)$booking['client_id'], "{$user['name']} cannot do the booking for " . date('D j M Y', strtotime($booking['booking_date'])) . '. Please choose another day or provider.');
-        flash('success', 'The booking has been cancelled and the client notified.');
+        $reason = trim((string)($_POST['reason'] ?? ''));
+        $sugg   = trim((string)($_POST['suggested_date'] ?? ''));
+        $eReason = v_text($reason, 'Reason', 5, 150);
+        $eDate = null;
+        if ($sugg !== '') {
+            $eDate = v_date($sugg);
+            if (!$eDate) {
+                [$free, $why] = provider_availability($pdo, $uid, $sugg);
+                if (!$free) $eDate = "You are not available on that day ($why). Please suggest a day you can work.";
+            }
+        }
+        if ($eReason || $eDate) {
+            $declineErr = ['id' => $bid, 'reason' => $eReason, 'date' => $eDate];
+            $_GET['view'] = 'bookings';   // show the page again with the form open, instead of redirecting
+        } else {
+            $pdo->prepare("UPDATE bookings SET status = 'cancelled', cancelled_by = 'provider', decline_reason = ?, suggested_date = ? WHERE id = ?")
+                ->execute([$reason, $sugg !== '' ? $sugg : null, $bid]);
+            $msg = "{$user['name']} cannot do the booking for " . date('D j M Y', strtotime($booking['booking_date'])) . ". Reason: $reason."
+                 . ($sugg !== '' ? ' Suggested new day: ' . date('D j M Y', strtotime($sugg)) . '. You can book again.' : ' Please choose another day or provider.');
+            notify($pdo, (int)$booking['client_id'], mb_substr($msg, 0, 300));
+            flash('success', 'The booking has been cancelled and the client has been told why' . ($sugg !== '' ? ', with your suggested day.' : '.'));
+        }
     } elseif ($action === 'complete' && $booking && $booking['status'] === 'confirmed') {
         if ($booking['booking_date'] > date('Y-m-d')) {
             flash('error', 'You can only mark a service as done on or after the booking day.');
@@ -61,15 +99,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $rev   = trim((string)($_POST['review'] ?? ''));
         $e1 = !preg_match('/^[1-5]$/', $stars) ? 'Please choose 1 to 5 stars.' : null;
         $e2 = v_text($rev, 'Review', 3, 500);
-        if ($e1 || $e2) flash('error', $e1 ?: $e2);
+        $aspects = parse_aspects('client', $e3);
+        if ($e1 || $e2 || $e3) flash('error', $e1 ?: ($e2 ?: $e3));
         else {
-            try {
-                $pdo->prepare('INSERT INTO ratings (booking_id, rater_id, ratee_id, stars, review) VALUES (?,?,?,?,?)')
-                    ->execute([$bid, $uid, $booking['client_id'], (int)$stars, $rev]);
+            if (save_rating($pdo, $bid, $uid, (int)$booking['client_id'], (int)$stars, $rev, $aspects, normalise_files($_FILES['images'] ?? []), $rateErr)) {
                 notify($pdo, (int)$booking['client_id'], "{$user['name']} rated you $stars star(s).");
                 flash('success', 'Thank you! Your rating has been saved.');
-            } catch (PDOException $ex) {
-                flash('error', 'You have already rated this booking.');
+            } else {
+                flash('error', $rateErr);
             }
         }
     } elseif ($action === 'save_profile') {
@@ -159,18 +196,26 @@ require_once 'includes/header.php';
 <?php if ($view === 'notifications'): include 'includes/notifications_view.php'; ?>
 
 <?php elseif ($view === 'reviews'):
-    $st = $pdo->prepare("SELECT r.stars, r.review, r.created_at, CONCAT(c.name,' ',c.surname) AS who
-        FROM ratings r JOIN users c ON c.id = r.rater_id WHERE r.ratee_id = ? ORDER BY r.created_at DESC");
-    $st->execute([$uid]);
-    $reviews = $st->fetchAll();
-    $avg = $reviews ? array_sum(array_column($reviews, 'stars')) / count($reviews) : null;
+    $rep = reputation($pdo, $uid, 'provider');
+    $reviews = reviews_about($pdo, $uid, 100);
 ?>
   <h2>What clients say about you</h2>
-  <p class="card stars"><?= e(stars_text($avg)) ?> <span class="hint">(<?= count($reviews) ?> review<?= count($reviews) === 1 ? '' : 's' ?>)</span></p>
-  <?php foreach ($reviews as $r): ?>
-    <div class="card"><p class="stars"><?= e(stars_text($r['stars'])) ?></p><p><?= nl2br(e($r['review'])) ?></p>
-      <p class="hint"><?= e($r['who']) ?> · <?= e(date('j M Y', strtotime($r['created_at']))) ?></p></div>
-  <?php endforeach; ?>
+  <div class="card">
+    <p class="stars big"><?= e(stars_text($rep['avg'])) ?> <span class="hint">(<?= $rep['n'] ?> review<?= $rep['n'] === 1 ? '' : 's' ?>)</span></p>
+    <?= aspect_summary_html($rep, 'provider') ?>
+    <p class="hint">Clients see this summary and your reviews before they book. You can reply once to each review.</p>
+  </div>
+  <?php foreach ($reviews as $r):
+      $form = '';
+      if (empty($r['reply'])) {
+          $form = '<form method="post" action="provider.php" class="reply-form">' . csrf_field()
+                . '<input type="hidden" name="action" value="reply_review"><input type="hidden" name="rating_id" value="' . (int)$r['id'] . '">'
+                . '<div class="field"><label for="rp' . (int)$r['id'] . '">Reply to this review (shown publicly)</label>'
+                . '<textarea id="rp' . (int)$r['id'] . '" name="reply" maxlength="300" required></textarea></div>'
+                . '<button class="btn btn-small" type="submit">Post reply</button></form>';
+      }
+      echo review_card_html($r, 'provider', 'Verified client', 'Your reply', $form);
+  endforeach; ?>
 
 <?php elseif ($view === 'ads'):
     $ads = $pdo->prepare('SELECT * FROM provider_ads WHERE provider_id = ? ORDER BY created_at DESC');
@@ -264,33 +309,61 @@ require_once 'includes/header.php';
       <h3><?= e(CATEGORIES[$b['category']] ?? $b['category']) ?> for <?= e($b['client_name']) ?>
         <span class="pill pill-<?= e($b['status']) ?>"><?= e($b['status'] === 'completed' ? 'Done' : ucfirst($b['status'])) ?></span></h3>
       <p><strong><?= e(date('l j F Y', strtotime($b['booking_date']))) ?></strong> · <?= e($b['area']) ?></p>
+      <p>🕘 <strong>Start time:</strong> <?= $b['start_time'] ? e(substr($b['start_time'], 0, 5)) : 'Not given' ?></p>
+      <?php if ($b['status'] !== 'cancelled'): ?>
+        <p>📍 <strong>Address:</strong> <?= e($b['address'] !== '' ? $b['address'] : 'No address given') ?></p>
+      <?php endif; ?>
       <?php if ($b['status'] === 'confirmed' || $b['status'] === 'completed'): ?><p>Client phone: <?= e($b['client_phone']) ?></p><?php endif; ?>
       <?php if ($b['description']): ?><p><?= nl2br(e($b['description'])) ?></p><?php endif; ?>
+      <?php if (in_array($b['status'], ['pending', 'confirmed'], true)) echo client_reputation_html($pdo, (int)$b['client_id']); ?>
       <div class="thumbs"><?php foreach ($imgs as $im): ?><a href="uploads/<?= e($im['image_path']) ?>" target="_blank" rel="noopener"><img src="uploads/<?= e($im['image_path']) ?>" alt="Picture from the client"></a><?php endforeach; ?></div>
-      <?php if ($b['status'] === 'cancelled'): ?><p class="hint">Cancelled by <?= e($b['cancelled_by']) ?>.</p><?php endif; ?>
+      <?php if ($b['status'] === 'cancelled'): ?><p class="hint">Cancelled by <?= e($b['cancelled_by']) ?>.</p>
+        <?php if ($b['cancelled_by'] === 'provider' && $b['decline_reason']): ?><p><strong>Your reason:</strong> <?= e($b['decline_reason']) ?><?= $b['suggested_date'] ? ' · <strong>Suggested day:</strong> ' . e(date('D j M Y', strtotime($b['suggested_date']))) : '' ?></p><?php endif; ?>
+      <?php endif; ?>
       <div class="btn-row">
         <?php
         $btn = function (string $action, string $label, string $class, ?string $confirm = null) use ($b) {
             echo '<form method="post" action="provider.php">' . csrf_field() . '<input type="hidden" name="action" value="' . $action . '"><input type="hidden" name="booking_id" value="' . (int)$b['id'] . '">'
                . '<button class="btn ' . $class . '"' . ($confirm ? ' data-confirm="' . e($confirm) . '"' : '') . '>' . e($label) . '</button></form>';
         };
-        if ($b['status'] === 'pending') { $btn('confirm', 'Confirm booking', ''); $btn('decline', 'Decline', 'btn-danger', 'Decline this booking?'); }
+        // Decline / cancel: a form asking WHY, with an optional suggested day for the client to try again
+        $reasonForm = function (string $action, string $label) use ($b, $declineErr) {
+            $id = (int)$b['id'];
+            $mine = $declineErr !== null && $declineErr['id'] === $id;
+            echo '<details class="decline-box"' . ($mine ? ' open' : '') . '><summary class="btn btn-danger">' . e($label) . '</summary>'
+               . '<form method="post" action="provider.php" class="card">' . csrf_field()
+               . '<input type="hidden" name="action" value="' . $action . '"><input type="hidden" name="booking_id" value="' . $id . '">'
+               . '<div class="field"><label for="why' . $id . '">Why can you not do this booking? *</label>'
+               . '<textarea id="why' . $id . '" name="reason" maxlength="150" required>' . e($mine ? ($_POST['reason'] ?? '') : '') . '</textarea>'
+               . '<span class="hint">The client will read this (5 to 150 characters).</span>' . ($mine ? field_error($declineErr, 'reason') : '') . '</div>'
+               . '<div class="field"><label for="sd' . $id . '">Suggest a day when the client can book you again (optional)</label>'
+               . '<input type="date" id="sd' . $id . '" name="suggested_date" min="' . date('Y-m-d') . '" max="' . date('Y-m-d', strtotime('+90 days')) . '" value="' . e($mine ? ($_POST['suggested_date'] ?? '') : '') . '">'
+               . ($mine ? field_error($declineErr, 'date') : '') . '</div>'
+               . '<button class="btn btn-danger" type="submit">Send to client and ' . e(strtolower($label)) . '</button></form></details>';
+        };
+        if ($b['status'] === 'pending') { $btn('confirm', 'Confirm booking', ''); $reasonForm('decline', 'Decline booking'); }
         if ($b['status'] === 'confirmed') {
             if ($b['booking_date'] <= date('Y-m-d')) $btn('complete', 'Mark service as done', 'btn-accent');
-            $btn('cancel', 'Cancel booking', 'btn-danger', 'Cancel this confirmed booking?');
+            $reasonForm('cancel', 'Cancel booking');
         } ?>
       </div>
       <?php if ($b['status'] === 'completed' && !$b['rated']): ?>
-        <form method="post" action="provider.php" class="card">
+        <form method="post" action="provider.php" enctype="multipart/form-data" class="card">
           <?= csrf_field() ?><input type="hidden" name="action" value="rate"><input type="hidden" name="booking_id" value="<?= (int)$b['id'] ?>">
           <h3>Rate <?= e($b['client_name']) ?></h3>
           <div class="star-pick" role="radiogroup" aria-label="Stars">
             <?php for ($i = 1; $i <= 5; $i++): ?><label><input type="radio" name="stars" value="<?= $i ?>" required><span><?= $i ?> ★</span></label><?php endfor; ?>
           </div>
+          <?= aspect_fields_html('client', (int)$b['id']) ?>
           <div class="field"><label for="rv<?= (int)$b['id'] ?>">Your review</label><textarea id="rv<?= (int)$b['id'] ?>" name="review" maxlength="500" required></textarea></div>
+          <div class="field"><label for="rp<?= (int)$b['id'] ?>">Add pictures (optional, up to 3, JPG/PNG, max 2 MB each)</label>
+            <input type="file" id="rp<?= (int)$b['id'] ?>" name="images[]" accept="image/jpeg,image/png,image/webp" multiple></div>
           <button class="btn btn-accent" type="submit">Submit rating</button>
         </form>
-      <?php elseif ($b['status'] === 'completed'): ?><p class="hint">You have rated this client. ✔</p><?php endif; ?>
+      <?php elseif ($b['status'] === 'completed'): ?>
+        <?= rating_box_html(rating_by($pdo, (int)$b['id'], $uid), 'Your rating of ' . $b['client_name']) ?>
+      <?php endif; ?>
+      <?php if ($b['status'] === 'completed') echo rating_box_html(rating_by($pdo, (int)$b['id'], (int)$b['client_id']), $b['client_name'] . ' rated you'); ?>
     </div>
   <?php endforeach; ?>
 <?php endif; ?>

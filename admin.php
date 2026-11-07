@@ -47,6 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($err = v_password($pw)) flash('error', $err);
         else {
             $pdo->prepare('UPDATE users SET password_hash = ? WHERE id = ?')->execute([password_hash($pw, PASSWORD_DEFAULT), $target]);
+            log_password_change($pdo, (int)$target, 'admin_reset', $uid);
             flash('success', 'Password reset for ' . $t['username'] . '.');
         }
         redirect('admin.php?view=users');
@@ -95,7 +96,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 /* -------------------------------------------------------------------- views */
-$views = ['overview' => 'Overview', 'users' => 'Users', 'bookings' => 'Service delivery', 'reports' => 'Reports', 'backup' => 'Backup'];
+$views = ['overview' => 'Overview', 'users' => 'Users', 'bookings' => 'Service delivery', 'reports' => 'Reports', 'backup' => 'Backup', 'notifications' => 'Notifications'];
 $view = $_GET['view'] ?? 'overview';
 if (!isset($views[$view]) && $view !== 'user') $view = 'overview';
 $pageTitle = 'Administration';
@@ -108,7 +109,9 @@ $count = fn(string $sql, array $a = []) => (function () use ($pdo, $sql, $a) { $
   <?php foreach ($views as $k => $l): ?><a href="admin.php?view=<?= $k ?>" class="<?= $view === $k || ($view === 'user' && $k === 'users') ? 'active' : '' ?>"><?= e($l) ?></a><?php endforeach; ?>
 </div>
 
-<?php if ($view === 'overview'): ?>
+<?php if ($view === 'notifications'): include 'includes/notifications_view.php'; ?>
+
+<?php elseif ($view === 'overview'): ?>
   <div class="grid">
     <div class="card stat"><strong><?= $count("SELECT COUNT(*) FROM users WHERE role='client'") ?></strong>Clients</div>
     <div class="card stat"><strong><?= $count("SELECT COUNT(*) FROM users WHERE role='provider'") ?></strong>Service providers</div>
@@ -118,6 +121,7 @@ $count = fn(string $sql, array $a = []) => (function () use ($pdo, $sql, $a) { $
     <div class="card stat"><strong><?= $count("SELECT COUNT(*) FROM bookings WHERE status='cancelled'") ?></strong>Cancelled bookings</div>
     <div class="card stat"><strong><?= $count("SELECT COUNT(*) FROM users WHERE status='suspended'") ?></strong>Suspended accounts</div>
     <div class="card stat"><strong><?= $count("SELECT COUNT(*) FROM login_logs WHERE success=1 AND DATE(created_at)=CURDATE()") ?></strong>Logins today</div>
+    <div class="card stat"><strong><?= $count("SELECT COUNT(*) FROM password_changes WHERE created_at > (NOW() - INTERVAL 7 DAY)") ?></strong>Password changes in the last 7 days</div>
   </div>
   <p class="card">Use <a href="admin.php?view=users">Users</a> to manage accounts, <a href="admin.php?view=bookings">Service delivery</a> to track bookings, <a href="admin.php?view=reports">Reports</a> for statistics and <a href="admin.php?view=backup">Backup</a> to save the database.</p>
 
@@ -147,6 +151,11 @@ $count = fn(string $sql, array $a = []) => (function () use ($pdo, $sql, $a) { $
     <h3>Recent bookings</h3>
     <div class="table-wrap"><table><tr><th>Date</th><th>Service</th><th>With</th><th>Status</th></tr>
       <?php foreach ($bk as $b): ?><tr><td><?= e($b['booking_date']) ?></td><td><?= e(CATEGORIES[$b['category']] ?? $b['category']) ?></td><td><?= e($b['other']) ?></td><td><span class="pill pill-<?= e($b['status']) ?>"><?= e(ucfirst($b['status'])) ?></span></td></tr><?php endforeach; ?></table></div>
+    <h3>Password changes</h3>
+    <?php $pc = $pdo->prepare("SELECT pc.method, pc.created_at, pc.ip, CONCAT(a.name,' ',a.surname) AS admin_name FROM password_changes pc LEFT JOIN users a ON a.id = pc.changed_by WHERE pc.user_id = ? ORDER BY pc.id DESC LIMIT 8"); $pc->execute([$id]); $pcRows = $pc->fetchAll(); ?>
+    <div class="table-wrap"><table><tr><th>When</th><th>How</th><th>Changed by</th><th>IP address</th></tr>
+      <?php foreach ($pcRows as $c): ?><tr><td><?= e(date('j M Y H:i', strtotime($c['created_at']))) ?></td><td><?= $c['method'] === 'self_reset' ? 'Forgot password page' : 'Reset by administrator' ?></td><td><?= e($c['method'] === 'self_reset' ? 'The user' : ($c['admin_name'] ?? 'Administrator')) ?></td><td><?= e($c['ip'] ?? '') ?></td></tr>
+      <?php endforeach; if (!$pcRows): ?><tr><td colspan="4">No password changes on record.</td></tr><?php endif; ?></table></div>
     <h3>Recent login attempts</h3>
     <div class="table-wrap"><table><tr><th>When</th><th>Role chosen</th><th>Result</th></tr>
       <?php foreach ($logins as $l): ?><tr><td><?= e($l['created_at']) ?></td><td><?= e($l['role_selected']) ?></td><td><?= $l['success'] ? 'Success' : e('Failed: ' . $l['reason']) ?></td></tr><?php endforeach; ?></table></div>
@@ -286,6 +295,20 @@ $count = fn(string $sql, array $a = []) => (function () use ($pdo, $sql, $a) { $
   <div class="table-wrap"><table><tr><th>Month</th><th>Clients</th><th>Service providers</th></tr>
     <?php foreach ($R['signups_by_month'] as $r): ?><tr><td><?= e($r['month']) ?></td><td><?= (int)$r['clients'] ?></td><td><?= (int)$r['providers'] ?></td></tr>
     <?php endforeach; if (!$R['signups_by_month']) : ?><tr><td colspan="3">No sign-ups in this period.</td></tr><?php endif; ?></table></div>
+
+  <h2>6. Password changes</h2>
+  <div class="grid">
+    <?php $pm = array_column($R['pw_by_method'], 'n', 'method'); ?>
+    <div class="card stat"><strong><?= (int)($pm['self_reset'] ?? 0) ?></strong>Changed by the user (Forgot password)</div>
+    <div class="card stat"><strong><?= (int)($pm['admin_reset'] ?? 0) ?></strong>Reset by an administrator</div>
+  </div>
+  <div class="grid">
+    <div class="card"><h3>Password changes by role</h3><?= bars($R['pw_by_role'], 'role', 'n', '', fn($r) => ucfirst($r)) ?></div>
+  </div>
+  <div class="table-wrap"><table><tr><th>When</th><th>User</th><th>Role</th><th>How</th><th>Changed by</th></tr>
+    <?php foreach ($R['pw_list'] as $c): ?><tr><td><?= e(date('j M Y H:i', strtotime($c['created_at']))) ?></td><td><?= e($c['who']) ?> (<?= e($c['username']) ?>)</td><td><?= e(ucfirst($c['role'])) ?></td>
+      <td><?= $c['method'] === 'self_reset' ? 'Forgot password page' : 'Reset by administrator' ?></td><td><?= e($c['method'] === 'self_reset' ? 'The user' : ($c['admin_name'] ?? 'Administrator')) ?></td></tr>
+    <?php endforeach; if (!$R['pw_list']): ?><tr><td colspan="5">No password changes in this period.</td></tr><?php endif; ?></table></div>
 
 <?php elseif ($view === 'backup'): $backups = list_backups(); ?>
   <h2>System backup</h2>
